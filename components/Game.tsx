@@ -17,6 +17,7 @@ import {
 } from "react-native";
 import { GameEngine } from "react-native-game-engine";
 import {
+  BombEffectRenderer,
   DeadlineRenderer,
   MergeEffectRenderer,
   WallRenderer,
@@ -144,7 +145,7 @@ export default function Game({
 
     const floor = Matter.Bodies.rectangle(
       SCREEN_WIDTH / 2,
-      SCREEN_HEIGHT + FLOOR_HEIGHT / 2 - 60,
+      SCREEN_HEIGHT + FLOOR_HEIGHT / 2 - 120,
       SCREEN_WIDTH,
       FLOOR_HEIGHT,
       { isStatic: true, label: "Floor" }
@@ -390,7 +391,8 @@ export default function Game({
         if (closest) fruitAtPoint = closest;
       }
       if (fruitAtPoint) {
-        // Mark fruit as hidden instead of removing physics body
+        // Remove from physics world and mark as hidden
+        Matter.World.remove(world, fruitAtPoint);
         // @ts-ignore
         fruitAtPoint.isHidden = true;
       }
@@ -423,12 +425,12 @@ export default function Game({
     } catch {}
     if (gameEngineRef.current) {
       gameEngineRef.current.dispatch({ type: "PLAY_SOUND", name: "pop" });
-      // Reuse merge effect as a radial ring at the touch point
+      // Dispatch bomb explosion effect
       gameEngineRef.current.dispatch({
-        type: "MERGE_EFFECT",
+        type: "BOMB_EFFECT",
         x,
         y,
-        radius: 100,
+        radius: 120,
       });
     }
 
@@ -486,11 +488,11 @@ export default function Game({
         <Image
           source={require("../assets/images/basket.png")}
           style={{
-            width: SCREEN_WIDTH,
-            height: SCREEN_HEIGHT * 0.85,
+            width: SCREEN_WIDTH * 0.9,
+            height: SCREEN_HEIGHT * 0.65,
             position: "absolute",
-            bottom: 0,
-            left: 0,
+            bottom: SCREEN_HEIGHT * 0.075,
+            left: SCREEN_WIDTH * 0.053,
           }}
           resizeMode="stretch"
         />
@@ -525,7 +527,7 @@ export default function Game({
         onPress={() => setIsBombMode(!isBombMode)}
       >
         <Text style={[styles.bombButtonText, isBombMode && { color: "#fff" }]}>
-          {isBombMode ? "💣 ACTIVE" : "💣 BOMB"}
+          💣
         </Text>
       </TouchableOpacity>
 
@@ -595,6 +597,23 @@ export default function Game({
                 y: e.y,
                 radius: e.radius,
                 renderer: MergeEffectRenderer,
+              };
+              setEntities(newEntities);
+
+              // Remove the effect after animation finishes
+              setTimeout(() => {
+                const cleanedEntities = { ...entitiesRef.current };
+                delete cleanedEntities[id];
+                setEntities(cleanedEntities);
+              }, 400);
+            } else if (e.type === "BOMB_EFFECT") {
+              const id = `bomb_effect_${Date.now()}_${Math.random()}`;
+              const newEntities = { ...entitiesRef.current };
+              newEntities[id] = {
+                x: e.x,
+                y: e.y,
+                radius: e.radius,
+                renderer: BombEffectRenderer,
               };
               setEntities(newEntities);
 
@@ -730,12 +749,12 @@ const styles = StyleSheet.create({
   },
   bombButton: {
     position: "absolute",
-    top: 40,
+    top: 150,
     left: 20,
     backgroundColor: "rgba(255, 255, 255, 0.9)",
     paddingHorizontal: 20,
     paddingVertical: 12,
-    borderRadius: 25,
+    borderRadius: 50,
     zIndex: 20,
     borderWidth: 3,
     borderColor: "#5d4037",

@@ -150,7 +150,7 @@ export const DeadlineRenderer = () => {
         top: DEADLINE_Y,
         left: 0,
         right: 0,
-        height: 2,
+        height: 3,
         backgroundColor: "rgba(255, 0, 0, 0.4)",
         borderStyle: "dashed",
         zIndex: 5,
@@ -193,6 +193,48 @@ export const MergeEffectRenderer = (props: any) => {
         transform: [{ scale: scaleAnim }],
         opacity: opacityAnim,
         zIndex: 100,
+      }}
+    />
+  );
+};
+
+export const BombEffectRenderer = (props: any) => {
+  const { x, y, radius } = props;
+  const scaleAnim = useRef(new Animated.Value(0)).current;
+  const opacityAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(scaleAnim, {
+        toValue: 3,
+        duration: 400,
+        useNativeDriver: true,
+      }),
+      Animated.timing(opacityAnim, {
+        toValue: 0,
+        duration: 400,
+        useNativeDriver: true,
+      }),
+    ]).start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={{
+        position: "absolute",
+        left: x - radius,
+        top: y - radius,
+        width: radius * 2,
+        height: radius * 2,
+        borderRadius: radius,
+        backgroundColor: "rgba(255, 100, 50, 0.9)",
+        borderWidth: 3,
+        borderColor: "rgba(255, 200, 100, 1)",
+        transform: [{ scale: scaleAnim }],
+        opacity: opacityAnim,
+        zIndex: 101,
       }}
     />
   );

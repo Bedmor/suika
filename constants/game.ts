@@ -101,4 +101,4 @@ export function pickWeightedIndex(maxIndex = FRUITS.length - 1) {
 export const GAME_WIDTH = 350;
 export const GAME_HEIGHT = 600;
 export const FLOOR_HEIGHT = 200;
-export const DEADLINE_Y = 180; // Game over line
+export const DEADLINE_Y = 255; // Game over line
