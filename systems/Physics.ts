@@ -115,6 +115,14 @@ export const Physics = (entities: any, { time, dispatch, events }: any) => {
                 });
                 // Play merge pop sound
                 dispatch({ type: "PLAY_SOUND", name: "pop" });
+
+                // Dispatch merge effect
+                dispatch({
+                  type: "MERGE_EFFECT",
+                  x: newX,
+                  y: newY,
+                  radius: newFruit.radius,
+                });
               }
             }
           }

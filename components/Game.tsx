@@ -5,16 +5,22 @@ import * as Haptics from "expo-haptics";
 import Matter from "matter-js";
 import React, { useEffect, useRef, useState } from "react";
 import {
+  Animated,
   Dimensions,
   Image,
   ImageBackground,
   PanResponder,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from "react-native";
 import { GameEngine } from "react-native-game-engine";
-import { DeadlineRenderer, WallRenderer } from "./game/renderers";
+import {
+  DeadlineRenderer,
+  MergeEffectRenderer,
+  WallRenderer,
+} from "./game/renderers";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -24,9 +30,34 @@ export default function Game({
   onGameOver: (score: number) => void;
 }) {
   const [score, setScore] = useState(0);
+  const scoreAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (score > 0) {
+      Animated.sequence([
+        Animated.timing(scoreAnim, {
+          toValue: 1.2,
+          duration: 100,
+          useNativeDriver: true,
+        }),
+        Animated.spring(scoreAnim, {
+          toValue: 1,
+          friction: 3,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [score, scoreAnim]);
+
   const [nextFruitIndex, setNextFruitIndex] = useState(0);
   const [maxFruitIndex, setMaxFruitIndex] = useState(0);
+  const [isBombMode, setIsBombMode] = useState(false);
+  const isBombModeRef = useRef(false);
   const gameEngineRef = useRef<any>(null);
+
+  useEffect(() => {
+    isBombModeRef.current = isBombMode;
+  }, [isBombMode]);
   const [entities, setEntities] = useState<any>(null);
   const entitiesRef = useRef<any>(null);
   const [running, setRunning] = useState(true);
@@ -34,11 +65,6 @@ export default function Game({
   const engineReadyRef = useRef(false);
   const nextFruitIndexRef = useRef(0);
   const maxFruitIndexRef = useRef(0);
-
-  useEffect(() => {
-    setNextFruitIndex(pickWeightedIndex(3));
-    setupWorld();
-  }, []);
 
   useEffect(() => {
     entitiesRef.current = entities;
@@ -169,9 +195,15 @@ export default function Game({
     });
   };
 
+  // Initialize first fruit and world on mount
+  useEffect(() => {
+    setNextFruitIndex(pickWeightedIndex(3));
+    setupWorld();
+  }, []);
+
   // kept for possible external usage (spawns at given page coordinates)
 
-  const [, setGesturePos] = useState<{ x: number; y: number }>({
+  const [gesturePos, setGesturePos] = useState<{ x: number; y: number }>({
     x: 0,
     y: 0,
   });
@@ -317,6 +349,93 @@ export default function Game({
     draggingFruitRef.current = null;
   };
 
+  const handleExplosion = (x: number, y: number) => {
+    if (!entitiesRef.current) return;
+    const { world } = entitiesRef.current.physics;
+
+    const explosionPos = { x, y };
+    const explosionRadius = 180;
+
+    let allBodies = Matter.Composite.allBodies(world) as any[];
+    // Remove the fruit directly under the touch, if any (use visual radius, not just physics point test)
+    try {
+      const bodiesAtPoint = Matter.Query.point(
+        allBodies,
+        explosionPos
+      ) as any[];
+      let fruitAtPoint = bodiesAtPoint.find((b: any) => b.label === "Fruit") as
+        | any
+        | undefined;
+
+      // If exact point test fails (sprite may be larger than physics body), pick closest fruit within a visual radius threshold
+      if (!fruitAtPoint) {
+        let closest: any | undefined;
+        let closestDist = Number.POSITIVE_INFINITY;
+        for (const b of allBodies) {
+          if ((b as any).label !== "Fruit") continue;
+          const diff = Matter.Vector.sub((b as any).position, explosionPos);
+          const dist = Matter.Vector.magnitude(diff);
+          // Effective visual radius: physics radius * spriteScale (default 1.12) + small slack
+          const fi = (b as any).fruitIndex ?? 0;
+          const spriteScale = (FRUITS[fi] as any)?.spriteScale ?? 1.12;
+          const visualRadius =
+            ((b as any).circleRadius ?? FRUITS[fi]?.radius ?? 20) *
+              spriteScale +
+            6;
+          if (dist <= visualRadius && dist < closestDist) {
+            closest = b;
+            closestDist = dist;
+          }
+        }
+        if (closest) fruitAtPoint = closest;
+      }
+      if (fruitAtPoint) {
+        // Mark fruit as hidden instead of removing physics body
+        // @ts-ignore
+        fruitAtPoint.isHidden = true;
+      }
+    } catch {}
+
+    for (const body of allBodies) {
+      if (body.label !== "Fruit") continue;
+      const diff = Matter.Vector.sub(body.position, explosionPos);
+      let dist = Matter.Vector.magnitude(diff);
+      // Avoid division by zero; nudge zero-distance bodies in a random direction
+      if (dist === 0) {
+        dist = 0.001;
+      }
+      if (dist < explosionRadius) {
+        const dir = Matter.Vector.normalise(diff);
+        // Smooth falloff; tune the scalar to feel good
+        const strength = (1 - dist / explosionRadius) ** 1.5;
+        const force = Matter.Vector.mult(dir, 0.05 * strength);
+        Matter.Body.applyForce(body, body.position, force);
+        // Add a small spin for visual flair
+        try {
+          Matter.Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.6);
+        } catch {}
+      }
+    }
+
+    // Haptics and sound feedback
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {}
+    if (gameEngineRef.current) {
+      gameEngineRef.current.dispatch({ type: "PLAY_SOUND", name: "pop" });
+      // Reuse merge effect as a radial ring at the touch point
+      gameEngineRef.current.dispatch({
+        type: "MERGE_EFFECT",
+        x,
+        y,
+        radius: 100,
+      });
+    }
+
+    // Exit bomb mode after one explosion
+    setIsBombMode(false);
+  };
+
   // PanResponder to track gestures and spawn fruits at gesture points (on release)
   const pan = useRef(
     PanResponder.create({
@@ -325,21 +444,29 @@ export default function Game({
       onPanResponderGrant: (evt) => {
         const x = evt.nativeEvent.pageX ?? SCREEN_WIDTH / 2;
         const y = evt.nativeEvent.pageY ?? DEADLINE_Y;
-        setGesturePos({ x, y });
-        beginDragFruit(x);
+
+        if (isBombModeRef.current) {
+          handleExplosion(x, y);
+        } else {
+          setGesturePos({ x, y });
+          beginDragFruit(x);
+        }
       },
       onPanResponderMove: (evt) => {
+        if (isBombModeRef.current) return;
         const x = evt.nativeEvent.pageX;
         const y = evt.nativeEvent.pageY;
         setGesturePos({ x, y });
         if (typeof x === "number") moveDraggedFruit(x);
       },
       onPanResponderRelease: (evt) => {
+        if (isBombModeRef.current) return;
         const x = evt.nativeEvent.pageX;
         releaseDraggedFruit(x);
         setGesturePos({ x: SCREEN_WIDTH / 2, y: SCREEN_HEIGHT / 2 });
       },
       onPanResponderTerminate: (evt) => {
+        if (isBombModeRef.current) return;
         const x = evt.nativeEvent.pageX;
 
         releaseDraggedFruit(x);
@@ -359,53 +486,89 @@ export default function Game({
         <Image
           source={require("../assets/images/basket.png")}
           style={{
-            width: SCREEN_WIDTH * 0.9,
-            height: SCREEN_HEIGHT * 0.8,
+            width: SCREEN_WIDTH,
+            height: SCREEN_HEIGHT * 0.85,
             position: "absolute",
-            top: SCREEN_HEIGHT - SCREEN_HEIGHT * 0.8,
-            left: SCREEN_WIDTH / 2 - (SCREEN_WIDTH * 0.9) / 2,
+            bottom: 0,
+            left: 0,
           }}
           resizeMode="stretch"
         />
       </View>
-      <Text style={styles.score}>Score: {score}</Text>
+
+      {draggingFruitRef.current && (
+        <View
+          style={{
+            position: "absolute",
+            left: gesturePos.x,
+            top: DEADLINE_Y,
+            width: 2,
+            height: SCREEN_HEIGHT - DEADLINE_Y - 60,
+            backgroundColor: "rgba(255, 255, 255, 0.3)",
+            zIndex: 5,
+          }}
+          pointerEvents="none"
+        />
+      )}
+      <Animated.View
+        style={[styles.scoreContainer, { transform: [{ scale: scoreAnim }] }]}
+      >
+        <Text style={styles.scoreLabel}>SCORE</Text>
+        <Text style={styles.scoreValue}>{score}</Text>
+      </Animated.View>
+
+      <TouchableOpacity
+        style={[
+          styles.bombButton,
+          isBombMode && { backgroundColor: "#ff4444", borderColor: "#fff" },
+        ]}
+        onPress={() => setIsBombMode(!isBombMode)}
+      >
+        <Text style={[styles.bombButtonText, isBombMode && { color: "#fff" }]}>
+          {isBombMode ? "💣 ACTIVE" : "💣 BOMB"}
+        </Text>
+      </TouchableOpacity>
 
       <View style={styles.nextFruitContainer}>
-        <Text style={styles.nextFruitLabel}>Next:</Text>
-        {(() => {
-          const nextRadius = FRUITS[nextFruitIndex].radius;
-          const size = Math.min(80, Math.max(30, nextRadius * 2));
-          const sprite = FRUITS[nextFruitIndex].sprite;
-          return sprite ? (
-            <Image
-              source={sprite}
-              style={{
-                width: size,
-                overflow: "visible",
-                height: size,
-                borderRadius: size / 2,
-              }}
-              resizeMode="center"
-            />
+        <Text style={styles.nextFruitLabel}>NEXT</Text>
+        <View style={styles.nextFruitPreview}>
+          {isBombMode ? (
+            <Text style={{ fontSize: 40 }}>💣</Text>
           ) : (
-            <View
-              style={{
-                width: size,
-                height: size,
-                justifyContent: "center",
-                alignItems: "center",
-                backgroundColor: FRUITS[nextFruitIndex].color,
-                borderRadius: size / 2,
-                borderWidth: 1,
-                borderColor: "rgba(0,0,0,0.2)",
-              }}
-            >
-              <Text style={{ fontSize: size * 0.6 }}>
-                {FRUITS[nextFruitIndex].label}
-              </Text>
-            </View>
-          );
-        })()}
+            (() => {
+              const nextRadius = FRUITS[nextFruitIndex].radius;
+              const size = Math.min(60, Math.max(30, nextRadius * 2));
+              const sprite = FRUITS[nextFruitIndex].sprite;
+              return sprite ? (
+                <Image
+                  source={sprite}
+                  style={{
+                    width: size,
+                    height: size,
+                  }}
+                  resizeMode="contain"
+                />
+              ) : (
+                <View
+                  style={{
+                    width: size,
+                    height: size,
+                    justifyContent: "center",
+                    alignItems: "center",
+                    backgroundColor: FRUITS[nextFruitIndex].color,
+                    borderRadius: size / 2,
+                    borderWidth: 2,
+                    borderColor: "rgba(0,0,0,0.1)",
+                  }}
+                >
+                  <Text style={{ fontSize: size * 0.6 }}>
+                    {FRUITS[nextFruitIndex].label}
+                  </Text>
+                </View>
+              );
+            })()
+          )}
+        </View>
       </View>
 
       {entities && (
@@ -424,6 +587,23 @@ export default function Game({
             } else if (e.type === "GAME_OVER") {
               setRunning(false);
               onGameOver(score);
+            } else if (e.type === "MERGE_EFFECT") {
+              const id = `effect_${Date.now()}_${Math.random()}`;
+              const newEntities = { ...entitiesRef.current };
+              newEntities[id] = {
+                x: e.x,
+                y: e.y,
+                radius: e.radius,
+                renderer: MergeEffectRenderer,
+              };
+              setEntities(newEntities);
+
+              // Remove the effect after animation finishes
+              setTimeout(() => {
+                const cleanedEntities = { ...entitiesRef.current };
+                delete cleanedEntities[id];
+                setEntities(cleanedEntities);
+              }, 400);
             } else if (e.type === "PLAY_SOUND") {
               if (e.name === "pop") {
                 const s = popSoundRef.current;
@@ -478,30 +658,96 @@ export default function Game({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: "#fdf6e3",
   },
   gameContainer: {
     flex: 1,
   },
-  score: {
+  scoreContainer: {
     position: "absolute",
-    top: 30,
+    top: 50,
     left: 20,
-    fontSize: 32,
-    fontWeight: "bold",
+    backgroundColor: "rgba(255, 255, 255, 0.9)",
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 15,
+    borderWidth: 3,
+    borderColor: "#5d4037",
+    alignItems: "center",
     zIndex: 10,
-    color: "#333",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  scoreLabel: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: "#8d6e63",
+    letterSpacing: 1,
+  },
+  scoreValue: {
+    fontSize: 28,
+    fontWeight: "900",
+    color: "#5d4037",
   },
   nextFruitContainer: {
     position: "absolute",
-    top: 60,
+    top: 50,
     right: 20,
     alignItems: "center",
     zIndex: 10,
   },
   nextFruitLabel: {
-    fontSize: 16,
-    fontWeight: "bold",
-    color: "#333",
+    fontSize: 12,
+    fontWeight: "900",
+    color: "#8d6e63",
+    letterSpacing: 1,
     marginBottom: 5,
+    backgroundColor: "rgba(255, 255, 255, 0.9)",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: "#5d4037",
+    overflow: "hidden",
+  },
+  nextFruitPreview: {
+    width: 80,
+    height: 80,
+    backgroundColor: "rgba(255, 255, 255, 0.9)",
+    borderRadius: 40,
+    borderWidth: 3,
+    borderColor: "#5d4037",
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  bombButton: {
+    position: "absolute",
+    top: 40,
+    left: 20,
+    backgroundColor: "rgba(255, 255, 255, 0.9)",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 25,
+    zIndex: 20,
+    borderWidth: 3,
+    borderColor: "#5d4037",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  bombButtonText: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: "#5d4037",
   },
 });

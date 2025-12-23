@@ -1,12 +1,27 @@
 import { DEADLINE_Y, FRUITS } from "@/constants/game";
-import React from "react";
-import { Image, Text, View } from "react-native";
+import React, { useEffect, useRef } from "react";
+import { Animated, Image, Text, View } from "react-native";
 
 export const FruitRenderer = (props: any) => {
   const { body, fruitIndex } = props;
   const { position } = body;
   // Matter.js bodies have a circleRadius if created as circles
   const radius = body.circleRadius;
+
+  const scaleAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.spring(scaleAnim, {
+      toValue: 1,
+      friction: 4,
+      tension: 40,
+      useNativeDriver: true,
+    }).start();
+  }, [scaleAnim]);
+
+  // Hide sprite if flagged invisible (bombed)
+  // @ts-ignore
+  if (body?.isHidden) return null;
 
   if (!FRUITS[fruitIndex]) return null;
 
@@ -20,7 +35,7 @@ export const FruitRenderer = (props: any) => {
   const spriteOffset = (radius * 2 - spriteSize) / 2;
 
   return (
-    <View
+    <Animated.View
       style={{
         position: "absolute",
         left: x,
@@ -31,6 +46,7 @@ export const FruitRenderer = (props: any) => {
         overflow: "visible", // allow sprite to overflow the physics hitbox
         justifyContent: "center",
         alignItems: "center",
+        transform: [{ scale: scaleAnim }],
       }}
     >
       {FRUITS[fruitIndex].sprite ? (
@@ -62,9 +78,23 @@ export const FruitRenderer = (props: any) => {
             justifyContent: "center",
             alignItems: "center",
             transform: [{ rotate: `${body.angle}rad` }],
+            borderWidth: 2,
+            borderColor: "rgba(0,0,0,0.1)",
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.2,
+            shadowRadius: 2,
+            elevation: 3,
           }}
         >
-          <Text style={{ fontSize: radius * 1.2 }}>
+          <Text
+            style={{
+              fontSize: radius * 1.2,
+              textShadowColor: "rgba(0,0,0,0.2)",
+              textShadowOffset: { width: 1, height: 1 },
+              textShadowRadius: 2,
+            }}
+          >
             {FRUITS[fruitIndex].label}
           </Text>
         </View>
@@ -85,7 +115,7 @@ export const FruitRenderer = (props: any) => {
           }}
         />
       )}
-    </View>
+    </Animated.View>
   );
 };
 
@@ -106,6 +136,7 @@ export const WallRenderer = (props: any) => {
         top: y,
         width: width,
         height: height,
+        backgroundColor: "transparent",
       }}
     />
   );
@@ -116,15 +147,52 @@ export const DeadlineRenderer = () => {
     <View
       style={{
         position: "absolute",
-        top: DEADLINE_Y, // DEADLINE_Y
+        top: DEADLINE_Y,
         left: 0,
         right: 0,
         height: 2,
-        backgroundColor: "rgba(255, 0, 0, 0.5)",
+        backgroundColor: "rgba(255, 0, 0, 0.4)",
         borderStyle: "dashed",
-        borderWidth: 1,
-        borderColor: "red",
         zIndex: 5,
+      }}
+    />
+  );
+};
+
+export const MergeEffectRenderer = (props: any) => {
+  const { x, y, radius } = props;
+  const scaleAnim = useRef(new Animated.Value(0.5)).current;
+  const opacityAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(scaleAnim, {
+        toValue: 2.5,
+        duration: 300,
+        useNativeDriver: true,
+      }),
+      Animated.timing(opacityAnim, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [scaleAnim, opacityAnim]);
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={{
+        position: "absolute",
+        left: x - radius,
+        top: y - radius,
+        width: radius * 2,
+        height: radius * 2,
+        borderRadius: radius,
+        backgroundColor: "rgba(255, 255, 255, 0.8)",
+        transform: [{ scale: scaleAnim }],
+        opacity: opacityAnim,
+        zIndex: 100,
       }}
     />
   );
